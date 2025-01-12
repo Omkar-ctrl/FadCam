@@ -1,17 +1,26 @@
 package com.fadcam;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutManager;
+import android.graphics.drawable.Icon;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
 
+import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.viewpager2.widget.ViewPager2;
 
+import com.fadcam.ui.ViewPagerAdapter;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 
 import java.io.File;
+import java.util.Collections;
 import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
@@ -19,26 +28,44 @@ public class MainActivity extends AppCompatActivity {
     private ViewPager2 viewPager;
     private BottomNavigationView bottomNavigationView;
 
-    private static final String PREFS_NAME = "app_prefs";
-    private static final String LANGUAGE_KEY = "language";
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // Apply saved theme on startup
+        SharedPreferencesManager sharedPreferencesManager = SharedPreferencesManager.getInstance(this);
+        String savedTheme = sharedPreferencesManager.sharedPreferences.getString(Constants.PREF_APP_THEME, "Dark Mode");
+        
+        Log.d("MainActivity", "Saved theme: " + savedTheme);
+        
+        // Always force dark mode
+        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES);
+        
+        // Only set AMOLED theme if explicitly selected
+        if ("AMOLED Black".equals(savedTheme)) {
+            Log.d("MainActivity", "Setting AMOLED theme");
+            getTheme().applyStyle(R.style.Theme_FadCam_Amoled, true);
+        } else {
+            Log.d("MainActivity", "Using default dark theme");
+        }
+        
         // Load and apply the saved language preference before anything else
-        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        String savedLanguageCode = prefs.getString(LANGUAGE_KEY, Locale.getDefault().getLanguage());
+        SharedPreferences prefs = getSharedPreferences(Constants.PREFS_NAME, Context.MODE_PRIVATE);
+        String savedLanguageCode = prefs.getString(Constants.LANGUAGE_KEY, Locale.getDefault().getLanguage());
 
         applyLanguage(savedLanguageCode);  // Apply the language preference
 
-        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES); setContentView(R.layout.activity_main); //force dark theme even on light themed devices
+        // Check if current locale is Pashto
+        if (getResources().getConfiguration().locale.getLanguage().equals("ps")) {
+            getWindow().getDecorView().setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        }
+
         setContentView(R.layout.activity_main);
 
         viewPager = findViewById(R.id.view_pager);
         bottomNavigationView = findViewById(R.id.bottom_navigation);
 
-        com.fadcam.ViewPagerAdapter adapter = new com.fadcam.ViewPagerAdapter(this);
+        ViewPagerAdapter adapter = new ViewPagerAdapter(this);
         viewPager.setAdapter(adapter);
 
         // Assuming viewPager is the instance of your ViewPager
@@ -84,7 +111,29 @@ public class MainActivity extends AppCompatActivity {
         org.osmdroid.config.Configuration.getInstance().setOsmdroidBasePath(osmdroidBasePath);
         org.osmdroid.config.Configuration.getInstance().setOsmdroidTileCache(osmdroidTileCache);
 
+        // Add dynamic shortcut for torch
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+            createDynamicShortcuts();
+        }
+    }
 
+    @RequiresApi(api = Build.VERSION_CODES.N_MR1)
+    private void createDynamicShortcuts() {
+        ShortcutManager shortcutManager = getSystemService(ShortcutManager.class);
+
+        // Torch Toggle Shortcut
+        Intent torchIntent = new Intent(this, TorchToggleActivity.class);
+        torchIntent.setAction(Intent.ACTION_VIEW);
+
+        ShortcutInfo torchShortcut = new ShortcutInfo.Builder(this, "torch_toggle")
+            .setShortLabel(getString(R.string.torch_shortcut_short_label))
+            .setLongLabel(getString(R.string.torch_shortcut_long_label))
+            // Set the icon for the torch shortcut 
+            .setIcon(Icon.createWithResource(this, R.drawable.flashlight_shortcut))
+            .setIntent(torchIntent)
+            .build();
+
+        shortcutManager.setDynamicShortcuts(Collections.singletonList(torchShortcut));
     }
 
     public void applyLanguage(String languageCode) {
@@ -98,12 +147,8 @@ public class MainActivity extends AppCompatActivity {
             Locale.setDefault(locale);
 
             android.content.res.Configuration config = new android.content.res.Configuration();
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                config.setLocale(locale);
-                getApplicationContext().createConfigurationContext(config);
-            } else {
-                config.locale = locale;
-            }
+            config.setLocale(locale);
+            getApplicationContext().createConfigurationContext(config);
 
             getResources().updateConfiguration(config, getResources().getDisplayMetrics());
 
@@ -112,5 +157,15 @@ public class MainActivity extends AppCompatActivity {
         } else {
             Log.d("MainActivity", "Language is already set to " + languageCode + "; no need to change.");
         }
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
     }
 }

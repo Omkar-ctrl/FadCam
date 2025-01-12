@@ -6,6 +6,8 @@ import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
+import android.annotation.SuppressLint;
+import android.app.ActivityManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -13,51 +15,57 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
-import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
-import android.hardware.camera2.CaptureRequest;
-import android.media.CamcorderProfile;
-import android.media.MediaRecorder;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.StatFs;
 import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.preference.PreferenceManager;
+import android.provider.Settings;
 import android.text.Html;
 import android.text.Spanned;
 import android.text.format.Formatter;
-import android.util.Log;
-import android.util.Range;
 import android.view.LayoutInflater;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.content.res.AppCompatResources;
 import androidx.cardview.widget.CardView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
-import com.arthenica.ffmpegkit.ExecuteCallback;
-import com.arthenica.ffmpegkit.FFmpegKit;
-import com.arthenica.ffmpegkit.Session;
-import com.fadcam.Constantes;
+import com.fadcam.CameraType;
+import com.fadcam.Constants;
+import com.fadcam.Log;
 import com.fadcam.R;
-import com.fadcam.RecordingService;
+import com.fadcam.services.RecordingService;
+import com.fadcam.RecordingState;
+import com.fadcam.SharedPreferencesManager;
+import com.fadcam.Utils;
+import com.fadcam.services.TorchService;
+import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.io.File;
@@ -76,54 +84,36 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+
+import android.graphics.drawable.Drawable;
 
 public class HomeFragment extends Fragment {
 
     private static final String TAG = "HomeFragment";
     private static final int LOCATION_PERMISSION_REQUEST_CODE = 100;
-    private LocationHelper locationHelper;
 
     private long recordingStartTime;
     private long videoBitrate;
 
-    private RecordsAdapter adapter;
-
-    static final String PREF_LOCATION_DATA = "location_data";
-
     private double latitude;
     private double longitude;
 
-    private File tempFileBeingProcessed;
-
-    private Handler handler = new Handler();
+    private Handler handlerClock = new Handler();
     private Runnable updateInfoRunnable;
     private Runnable updateClockRunnable; // Declare here
 
-    private CameraDevice cameraDevice;
-    private CameraCaptureSession cameraCaptureSession;
-    private CaptureRequest.Builder captureRequestBuilder;
-    private MediaRecorder mediaRecorder;
-    private boolean isRecording = false;
     private TextureView textureView;
-    private SharedPreferences sharedPreferences;
 
     private Handler tipHandler = new Handler();
     private int typingIndex = 0;
     private boolean isTypingIn = true;
     private String currentTip = "";
 
-    private static final String QUALITY_SD = "SD";
-    private static final String QUALITY_HD = "HD";
-    private static final String QUALITY_FHD = "FHD";
-
     private TextView tvStorageInfo;
     private TextView tvPreviewPlaceholder;
-    private Button buttonStartStop;
-    private Button buttonPauseResume;
+    private MaterialButton buttonStartStop;
+    private MaterialButton buttonPauseResume;
     private Button buttonCamSwitch;
-    private boolean isPaused = false;
     private boolean isPreviewEnabled = true;
 
     private View cardPreview;
@@ -131,46 +121,66 @@ public class HomeFragment extends Fragment {
 
     private CardView cardClock;
     private TextView tvClock, tvDateEnglish, tvDateArabic;
-    private CameraManager cameraManager;
-    private String cameraId;
 
     //FragmentActivity tipres = requireActivity();
     private TextView tvTip;
     private String[] tips;
 
-
     private int currentTipIndex = 0;
 
     private TextView tvStats;
 
-
     private List<String> messageQueue;
     private List<String> recentlyShownMessages;
-    private Random random = new Random();
+    private final Random random = new Random();
     private static final int RECENT_MESSAGE_LIMIT = 3; // Adjust as needed
 
     private static final int REQUEST_PERMISSIONS = 1;
+    private android.os.PowerManager.WakeLock wakeLock;
 //    private static final String PREF_FIRST_LAUNCH = "first_launch";
+
+    private RecordingState recordingState = RecordingState.NONE;
+
+    private BroadcastReceiver broadcastOnRecordingStarted;
+    private BroadcastReceiver broadcastOnRecordingResumed;
+    private BroadcastReceiver broadcastOnRecordingPaused;
+    private BroadcastReceiver broadcastOnRecordingStopped;
+    private BroadcastReceiver broadcastOnRecordingStateCallback;
+
+    private MaterialButton buttonTorchSwitch;
+
+    private CameraManager cameraManager;
+    private String cameraId;
+    private boolean isTorchOn = false;
+
+    private BroadcastReceiver torchReceiver;
+
+    private SharedPreferencesManager sharedPreferencesManager;
 
     // important
     private void requestEssentialPermissions() {
         Log.d(TAG, "requestEssentialPermissions: Requesting essential permissions");
-        String[] permissions;
+        List<String> permissions;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) { // Android 11 and above
-            permissions = new String[]{
+            permissions = new ArrayList<>(Arrays.asList(
                     Manifest.permission.CAMERA,
                     Manifest.permission.RECORD_AUDIO,
-                    Manifest.permission.READ_MEDIA_VIDEO,
                     Manifest.permission.READ_EXTERNAL_STORAGE,
-                    Manifest.permission.POST_NOTIFICATIONS
-            };
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ));
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                permissions.add(Manifest.permission.READ_MEDIA_VIDEO);
+                permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+            }
         } else { // Below Android 11
-            permissions = new String[]{
+            permissions = new ArrayList<>(Arrays.asList(
                     Manifest.permission.CAMERA,
                     Manifest.permission.RECORD_AUDIO,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
-            };
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    Manifest.permission.READ_EXTERNAL_STORAGE
+            ));
         }
 
         List<String> permissionsToRequest = new ArrayList<>();
@@ -184,8 +194,42 @@ public class HomeFragment extends Fragment {
         if (!permissionsToRequest.isEmpty()) {
             ActivityCompat.requestPermissions(requireActivity(), permissionsToRequest.toArray(new String[0]), REQUEST_PERMISSIONS);
         }
+
+        // Request to disable battery optimization
+        requestBatteryOptimizationPermission();
     }
 
+    private void requestBatteryOptimizationPermission() {
+        android.os.PowerManager powerManager = (android.os.PowerManager) requireActivity().getSystemService(Context.POWER_SERVICE); // Full path and context adjusted
+        String packageName = requireActivity().getPackageName(); // Correct package retrieval
+
+        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                intent.setData(Uri.parse("package:" + packageName));
+                startActivity(intent);
+            }
+        }
+    }
+
+    // Call this method when the recording starts to acquire wake lock
+    private void acquireWakeLock() {
+        android.os.PowerManager powerManager = (android.os.PowerManager) requireActivity().getSystemService(Context.POWER_SERVICE); // Full path and context adjusted
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MyApp::RecordingLock");
+
+        if (!wakeLock.isHeld()) {
+            wakeLock.acquire();
+            Log.d(TAG, "WakeLock acquired.");
+        }
+    }
+
+    // Call this when the recording ends to release wake lock
+    private void releaseWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+            Log.d(TAG, "WakeLock released.");
+        }
+    }
 
     private void initializeMessages() {
         messageQueue = new ArrayList<>(Arrays.asList(getResources().getStringArray(R.array.easter_eggs_array)));
@@ -220,10 +264,9 @@ public class HomeFragment extends Fragment {
         }
     }
 
-
     private void setupLongPressListener() {
         cardPreview.setOnLongClickListener(v -> {
-            if (isRecording) {
+            if (isRecording()) {
                 // Start scaling down animation
                 cardPreview.animate()
                         .scaleX(0.9f)
@@ -287,9 +330,8 @@ public class HomeFragment extends Fragment {
         });
     }
 
-
     private void updatePreviewVisibility() {
-        if (isRecording) {
+        if (isRecording()) {
             if (isPreviewEnabled) {
                 textureView.setVisibility(View.VISIBLE);
                 tvPreviewPlaceholder.setVisibility(View.GONE);
@@ -303,31 +345,6 @@ public class HomeFragment extends Fragment {
             tvPreviewPlaceholder.setVisibility(View.VISIBLE);
             tvPreviewPlaceholder.setText(getString(R.string.ui_preview_area));
         }
-
-        updateCameraPreview();
-    }
-
-    private void updateCameraPreview() {
-        if (cameraCaptureSession != null && captureRequestBuilder != null && textureView.isAvailable()) {
-            try {
-                SurfaceTexture texture = textureView.getSurfaceTexture();
-                if (texture == null) {
-                    Log.e(TAG, "updateCameraPreview: SurfaceTexture is null");
-                    return;
-                }
-
-                Surface previewSurface = new Surface(texture);
-
-                captureRequestBuilder.removeTarget(previewSurface);
-                if (isPreviewEnabled && isRecording) {
-                    captureRequestBuilder.addTarget(previewSurface);
-                }
-
-                cameraCaptureSession.setRepeatingRequest(captureRequestBuilder.build(), null, null);
-            } catch (CameraAccessException e) {
-                Log.e(TAG, "Error updating camera preview", e);
-            }
-        }
     }
 
     private void resetTimers() {
@@ -338,13 +355,15 @@ public class HomeFragment extends Fragment {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        sharedPreferences = requireActivity().getPreferences(Context.MODE_PRIVATE);
-        locationHelper = new LocationHelper(requireContext());
-        cameraManager = (CameraManager) getActivity().getSystemService(Context.CAMERA_SERVICE);
+
+        Log.init(requireContext());
+
         Log.d(TAG, "HomeFragment created.");
 
         // Request essential permissions on every launch
         requestEssentialPermissions();
+
+        sharedPreferencesManager = SharedPreferencesManager.getInstance(requireContext());
 
         // Check if it's the first launch
 //        boolean isFirstLaunch = sharedPreferences.getBoolean(PREF_FIRST_LAUNCH, true);
@@ -355,45 +374,305 @@ public class HomeFragment extends Fragment {
 //            // Set first launch to false
 //            sharedPreferences.edit().putBoolean(PREF_FIRST_LAUNCH, false).apply();
 //        }
-
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     @Override
     public void onStart() {
         super.onStart();
-        //fetch Camera status
-        String currentCameraSelection = sharedPreferences.getString(Constantes.PREF_CAMERA_SELECTION, Constantes.CAMERA_BACK);
-        Toast.makeText(getContext(), this.getString(R.string.current_camera) + ": " + currentCameraSelection, Toast.LENGTH_SHORT).show();
+
+        if(!textureView.isAvailable()) {
+            textureView.setVisibility(View.VISIBLE);
+        }
+
+        registerBroadcastOnRecordingStarted();
+        registerBroadcastOnRecordingResumed();
+        registerBroadcastOnRecordingPaused();
+        registerBrodcastOnRecordingStopped();
+        registerBroadcastOnRecordingStateCallback();
+
+        IntentFilter[] filters = {
+                new IntentFilter(Constants.BROADCAST_ON_RECORDING_STARTED),
+                new IntentFilter(Constants.BROADCAST_ON_RECORDING_RESUMED),
+                new IntentFilter(Constants.BROADCAST_ON_RECORDING_PAUSED),
+                new IntentFilter(Constants.BROADCAST_ON_RECORDING_STOPPED),
+                new IntentFilter(Constants.BROADCAST_ON_RECORDING_STATE_CALLBACK)
+        };
+
+        BroadcastReceiver[] receivers = {
+                broadcastOnRecordingStarted,
+                broadcastOnRecordingResumed,
+                broadcastOnRecordingPaused,
+                broadcastOnRecordingStopped,
+                broadcastOnRecordingStateCallback
+        };
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13 and above
+            for (int i = 0; i < receivers.length; i++) {
+                requireContext().registerReceiver(
+                        receivers[i],
+                        filters[i],
+                        Context.RECEIVER_EXPORTED
+                );
+            }
+        } else {
+            // Android 12 and earlier
+            for (int i = 0; i < receivers.length; i++) {
+                requireContext().registerReceiver(receivers[i], filters[i]);
+            }
+        }
+
+        showCurrentCameraSelection();
+    }
+
+    /**
+     * Displays a toast message showing the currently selected camera based on shared preferences
+     */
+    private void showCurrentCameraSelection() {
+        CameraType currentCameraType = sharedPreferencesManager.getCameraSelection();
+        String currentCameraTypeString = "";
+        if (currentCameraType.equals(CameraType.FRONT)) {
+            currentCameraTypeString = getString(R.string.front);
+        } else if (currentCameraType.equals(CameraType.BACK)) {
+            currentCameraTypeString = getString(R.string.back);
+        }
+
+        Toast.makeText(getContext(), this.getString(R.string.current_camera) + ": " + currentCameraTypeString.toLowerCase(), Toast.LENGTH_SHORT).show();
+    }
+
+    private void fetchRecordingState()
+    {
+        Intent startIntent = new Intent(getActivity(), RecordingService.class);
+        startIntent.setAction(Constants.BROADCAST_ON_RECORDING_STATE_REQUEST);
+        requireActivity().startService(startIntent);
+    }
+
+    private void registerBroadcastOnRecordingStateCallback() {
+        broadcastOnRecordingStateCallback = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent i)
+            {
+                RecordingState recordingStateIntent = (RecordingState) i.getSerializableExtra(Constants.INTENT_EXTRA_RECORDING_STATE);
+                if (recordingStateIntent == null) {
+                    recordingStateIntent = RecordingState.NONE;
+                }
+
+                switch(recordingStateIntent) {
+                    case NONE:
+                        onRecordingStopped();
+                        break;
+                    case IN_PROGRESS:
+                        if(isRecording()) {
+                            updateRecordingSurface();
+                        } else {
+                            onRecordingStarted(false);
+                            updateRecordingSurface();
+                        }
+                        break;
+                    case PAUSED:
+                        onRecordingPaused();
+                        break;
+                }
+
+                recordingState = recordingStateIntent;
+            }
+        };
+    }
+
+    private void registerBroadcastOnRecordingStarted() {
+        broadcastOnRecordingStarted = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent i) {
+                recordingStartTime = i.getLongExtra(Constants.INTENT_EXTRA_RECORDING_START_TIME, 0);
+                onRecordingStarted(true);
+            }
+        };
+    }
+
+    private void registerBroadcastOnRecordingResumed() {
+        broadcastOnRecordingResumed = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent i)
+            {
+                onRecordingResumed();
+            }
+        };
+    }
+
+    private void registerBroadcastOnRecordingPaused() {
+        broadcastOnRecordingPaused = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent i)
+            {
+                onRecordingPaused();
+            }
+        };
+    }
+
+    private void registerBrodcastOnRecordingStopped() {
+        broadcastOnRecordingStopped = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent i)
+            {
+                onRecordingStopped();
+            }
+        };
+    }
+
+    private void onRecordingStarted(boolean toast) {
+        recordingState = RecordingState.IN_PROGRESS;
+        
+        acquireWakeLock();
+        setVideoBitrate();
+        
+        buttonStartStop.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.button_stop)));
+        buttonStartStop.setText(getString(R.string.button_stop));
+        buttonStartStop.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_stop));
+        buttonStartStop.setEnabled(true);
+        
+        buttonPauseResume.setEnabled(true);
+        buttonPauseResume.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_pause));
+        buttonCamSwitch.setEnabled(false);
+
+        startUpdatingInfo();
+
+        if(toast) {
+            vibrateTouch();
+            Toast.makeText(getContext(), R.string.video_recording_started, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void onRecordingResumed() {
+        recordingState = RecordingState.IN_PROGRESS;
+
+        buttonPauseResume.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_pause));
+        buttonPauseResume.setEnabled(true);
+
+        buttonStartStop.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.button_stop)));
+        buttonStartStop.setText(getString(R.string.button_stop));
+        buttonStartStop.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_stop));
+        buttonStartStop.setEnabled(true);
+
+        buttonCamSwitch.setEnabled(false);
+
+        startUpdatingInfo();
+    }
+
+    private void onRecordingPaused() {
+        recordingState = RecordingState.PAUSED;
+
+        buttonPauseResume.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_play));
+        buttonPauseResume.setEnabled(true);
+
+        buttonCamSwitch.setEnabled(false);
+
+        buttonStartStop.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.button_stop)));
+        buttonStartStop.setText(getString(R.string.button_stop));
+        buttonStartStop.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_stop));
+    }
+
+    private void onRecordingStopped() {
+
+        recordingState = RecordingState.NONE;
+
+        releaseWakeLock();
+
+        buttonStartStop.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.button_start)));
+        buttonStartStop.setText(getString(R.string.button_start));
+        buttonStartStop.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_play));
+        buttonStartStop.setEnabled(true);
+
+        buttonPauseResume.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_pause));
+        buttonPauseResume.setEnabled(false);
+
+        buttonCamSwitch.setEnabled(true);
+
+        updatePreviewVisibility();
+
+        stopUpdatingInfo();
     }
 
     @Override
+    public void onStop() {
+        super.onStop();
+
+        Log.e(TAG, "HomeFragment stopped");
+
+        if(isRecording()) {
+            Intent recordingIntent = new Intent(getActivity(), RecordingService.class);
+            recordingIntent.setAction(Constants.INTENT_ACTION_CHANGE_SURFACE);
+            requireActivity().startService(recordingIntent);
+        }
+
+        requireActivity().unregisterReceiver(broadcastOnRecordingStarted);
+        requireActivity().unregisterReceiver(broadcastOnRecordingResumed);
+        requireActivity().unregisterReceiver(broadcastOnRecordingPaused);
+        requireActivity().unregisterReceiver(broadcastOnRecordingStopped);
+        requireActivity().unregisterReceiver(broadcastOnRecordingStateCallback);
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    @Override
     public void onResume() {
         super.onResume();
-        locationHelper.startLocationUpdates();
 
         Log.d(TAG, "HomeFragment resumed.");
 
-        IntentFilter filter = new IntentFilter("RECORDING_STATE_CHANGED");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            getActivity().registerReceiver(recordingStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        }
-
-        setupStartStopButton();
+        fetchRecordingState();
 
         updateStats();
+
+        // Initialize the receiver if null
+        if (torchReceiver == null) {
+            torchReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    if (Constants.BROADCAST_ON_TORCH_STATE_CHANGED.equals(intent.getAction())) {
+                        boolean torchState = intent.getBooleanExtra(Constants.INTENT_EXTRA_TORCH_STATE, false);
+                        isTorchOn = torchState;
+                        Log.d("TorchDebug", "Received broadcast - Torch state: " + torchState);
+                        
+                        requireActivity().runOnUiThread(() -> {
+                            try {
+                                buttonTorchSwitch.setIcon(AppCompatResources.getDrawable(
+                                    requireContext(),
+                                    R.drawable.ic_flashlight_on
+                                ));
+                                buttonTorchSwitch.setSelected(isTorchOn);
+                                buttonTorchSwitch.setEnabled(true);
+                            } catch (Exception e) {
+                                Log.e("TorchDebug", "Error updating torch icon: " + e.getMessage());
+                            }
+                        });
+                    }
+                }
+            };
+            
+            IntentFilter filter = new IntentFilter(Constants.BROADCAST_ON_TORCH_STATE_CHANGED);
+            // Add the RECEIVER_NOT_EXPORTED flag for Android 13+ compatibility
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                requireContext().registerReceiver(torchReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                requireContext().registerReceiver(torchReceiver, filter);
+            }
+        }
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        locationHelper.stopLocationUpdates();
+        //locationHelper.stopLocationUpdates();
         Log.d(TAG, "HomeFragment paused.");
 
-        getActivity().unregisterReceiver(recordingStateReceiver);
-    }
-
-    private String getLocationData() {
-        return locationHelper.getLocationData();
+        // Only unregister if receiver exists
+        if (torchReceiver != null) {
+            try {
+                requireContext().unregisterReceiver(torchReceiver);
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "Receiver was not registered: " + e.getMessage());
+            }
+        }
     }
 
 //    @Override
@@ -444,7 +723,7 @@ public class HomeFragment extends Fragment {
     }
 
     private void savePreviewState() {
-        SharedPreferences.Editor editor = sharedPreferences.edit();
+        SharedPreferences.Editor editor = sharedPreferencesManager.sharedPreferences.edit();
         editor.putBoolean("isPreviewEnabled", isPreviewEnabled);
         editor.apply();
     }
@@ -452,7 +731,7 @@ public class HomeFragment extends Fragment {
     //    function to use haptic feedbacks
     private void vibrateTouch() {
         // Haptic Feedback
-        Vibrator vibrator = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
+        Vibrator vibrator = (Vibrator) requireContext().getSystemService(Context.VIBRATOR_SERVICE);
         if (vibrator != null && vibrator.hasVibrator()) {
             VibrationEffect effect = null;
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
@@ -466,16 +745,30 @@ public class HomeFragment extends Fragment {
 
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
-        tips = requireActivity().getResources().getStringArray(R.array.tips_widget);
         super.onViewCreated(view, savedInstanceState);
+        TorchService.setHomeFragment(this);
+        
+        // Add this debug code
+        try {
+            Drawable onIcon = AppCompatResources.getDrawable(requireContext(), R.drawable.ic_flashlight_on);
+            Drawable offIcon = AppCompatResources.getDrawable(requireContext(), R.drawable.ic_flashlight_on);
+            Log.d("TorchDebug", "Icon resources loaded - ON: " + (onIcon != null) + ", OFF: " + (offIcon != null));
+        } catch (Exception e) {
+            Log.e("TorchDebug", "Error checking icon resources: " + e.getMessage());
+        }
+        
+        tips = requireActivity().getResources().getStringArray(R.array.tips_widget);
         Log.d(TAG, "onViewCreated: Setting up UI components");
 
-        textureView = view.findViewById(R.id.textureView);
+        setupTextureView(view);
+
         tvStorageInfo = view.findViewById(R.id.tvStorageInfo);
         tvPreviewPlaceholder = view.findViewById(R.id.tvPreviewPlaceholder);
+        tvPreviewPlaceholder.setVisibility(View.VISIBLE);
         buttonStartStop = view.findViewById(R.id.buttonStartStop);
         buttonPauseResume = view.findViewById(R.id.buttonPauseResume);
         buttonCamSwitch = view.findViewById(R.id.buttonCamSwitch);
+
         tvTip = view.findViewById(R.id.tvTip);
         tvStats = view.findViewById(R.id.tvStats);
 
@@ -496,8 +789,7 @@ public class HomeFragment extends Fragment {
         cardPreview = view.findViewById(R.id.cardPreview);
         vibrator = (Vibrator) requireContext().getSystemService(Context.VIBRATOR_SERVICE);
 
-        sharedPreferences = requireActivity().getPreferences(Context.MODE_PRIVATE);
-        isPreviewEnabled = sharedPreferences.getBoolean("isPreviewEnabled", true);
+        isPreviewEnabled = sharedPreferencesManager.isPreviewEnabled();
 
         resetTimers();
         copyFontToInternalStorage();
@@ -514,6 +806,34 @@ public class HomeFragment extends Fragment {
         setupButtonListeners();
         setupLongPressListener();
         updatePreviewVisibility();
+
+        buttonTorchSwitch = view.findViewById(R.id.buttonTorchSwitch);
+        initializeTorch();
+        setupTorchButton();
+    }
+
+    private void setupTextureView(@NonNull View view) {
+        textureView = view.findViewById(R.id.textureView);
+        textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surfaceTexture, int width, int height) {
+                surfaceTexture.setDefaultBufferSize(720, 1080);
+                textureView.setVisibility(View.INVISIBLE);
+
+                fetchRecordingState();
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {}
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                return false;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {}
+        });
     }
 
     private boolean areEssentialPermissionsGranted() {
@@ -522,8 +842,14 @@ public class HomeFragment extends Fragment {
 
         boolean storageGranted;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) { // Android 11 and above
-            storageGranted = ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
-                    ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // Android 13 and above
+                storageGranted = ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED ||
+                        ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+            } else {
+                // Below Android 13
+                storageGranted = ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
+            }
         } else { // Below Android 11
             storageGranted = ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
         }
@@ -548,7 +874,6 @@ public class HomeFragment extends Fragment {
                 (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED ? "Granted" : "Denied"));
     }
 
-
     private void setupButtonListeners() {
         buttonStartStop.setOnClickListener(v -> {
             debugPermissionsStatus();
@@ -556,7 +881,7 @@ public class HomeFragment extends Fragment {
                 debugPermissionsStatus();
                 showPermissionsInfoDialog();
             } else {
-                if (!isRecording) {
+                if (recordingState.equals(RecordingState.NONE)) {
                     startRecording();
                 } else {
                     stopRecording();
@@ -566,16 +891,12 @@ public class HomeFragment extends Fragment {
         });
 
         buttonPauseResume.setOnClickListener(v -> {
-            if (isRecording) {
-                if (isPaused) {
-                    vibrateTouch();
-                    Toast.makeText(getContext(), R.string.video_recording_resumed, Toast.LENGTH_SHORT).show();
-                    resumeRecording();
-                } else {
-                    vibrateTouch();
-                    Toast.makeText(getContext(), R.string.video_recording_paused, Toast.LENGTH_SHORT).show();
-                    pauseRecording();
-                }
+            if (isPaused()) {
+                vibrateTouch();
+                resumeRecording();
+            } else {
+                vibrateTouch();
+                pauseRecording();
             }
         });
 
@@ -584,21 +905,57 @@ public class HomeFragment extends Fragment {
         });
     }
 
+    private void startRecording() {
+        SurfaceTexture surfaceTexture = textureView.getSurfaceTexture();
+
+        tvPreviewPlaceholder.setVisibility(View.GONE);
+        textureView.setVisibility(View.VISIBLE);
+
+        buttonStartStop.setEnabled(false);
+        buttonCamSwitch.setEnabled(false);
+
+        Intent startIntent = new Intent(getActivity(), RecordingService.class);
+        startIntent.setAction(Constants.INTENT_ACTION_START_RECORDING);
+
+        if(surfaceTexture != null) {
+            startIntent.putExtra("SURFACE", new Surface(surfaceTexture));
+        }
+
+        requireActivity().startService(startIntent);
+    }
+
+    private void updateRecordingSurface()
+    {
+        SurfaceTexture surfaceTexture = textureView.getSurfaceTexture();
+
+        tvPreviewPlaceholder.setVisibility(View.GONE);
+        textureView.setVisibility(View.VISIBLE);
+
+        Intent startIntent = new Intent(getActivity(), RecordingService.class);
+        startIntent.setAction(Constants.INTENT_ACTION_CHANGE_SURFACE);
+
+        if(surfaceTexture != null) {
+            startIntent.putExtra("SURFACE", new Surface(surfaceTexture));
+        }
+
+        requireActivity().startService(startIntent);
+    }
+
     private void startUpdatingClock() {
         updateClockRunnable = new Runnable() {
             @Override
             public void run() {
                 updateClock();
-                handler.postDelayed(this, 1000); // Update every second
+                handlerClock.postDelayed(this, 1000); // Update every second
             }
         };
-        handler.post(updateClockRunnable);
+        handlerClock.post(updateClockRunnable);
     }
 
     // Method to stop updating the clock
     private void stopUpdatingClock() {
         if (updateClockRunnable != null) {
-            handler.removeCallbacks(updateClockRunnable);
+            handlerClock.removeCallbacks(updateClockRunnable);
             updateClockRunnable = null;
         }
     }
@@ -610,7 +967,6 @@ public class HomeFragment extends Fragment {
             return true; // Indicate the long press was handled
         });
     }
-
 
     private void addWobbleAnimation() {
         // Define the scale down and scale up values
@@ -661,9 +1017,8 @@ public class HomeFragment extends Fragment {
         scaleDownSet.start();
     }
 
-
     private void showDisplayOptionsDialog() {
-        new MaterialAlertDialogBuilder(getContext())
+        new MaterialAlertDialogBuilder(requireContext())
                 .setTitle(getString(R.string.dialog_clock_title))
                 .setSingleChoiceItems(new String[]{
                         getString(R.string.dialog_clock_timeonly),
@@ -679,27 +1034,23 @@ public class HomeFragment extends Fragment {
     }
 
     private int getCurrentDisplayOption() {
-        SharedPreferences prefs = getActivity().getSharedPreferences("AppPreferences", Context.MODE_PRIVATE);
-        return prefs.getInt("display_option", 2); // Default to "Everything"
+        return requireActivity().getSharedPreferences("AppPreferences", Context.MODE_PRIVATE).getInt("display_option", 2); // Default to "Everything"
     }
 
     private void saveDisplayOption(int option) {
-        SharedPreferences prefs = getActivity().getSharedPreferences("AppPreferences", Context.MODE_PRIVATE);
-        SharedPreferences.Editor editor = prefs.edit();
+        SharedPreferences.Editor editor = requireActivity().getSharedPreferences("AppPreferences", Context.MODE_PRIVATE).edit();
         editor.putInt("display_option", option);
         editor.apply();
     }
-
 
     private void showOptionsAndAnimate() {
         addWobbleAnimation();
         showDisplayOptionsDialog();
     }
 
-
     // Method to update the clock and dates
     private void updateClock() {
-        SharedPreferences prefs = getActivity().getSharedPreferences("AppPreferences", Context.MODE_PRIVATE);
+        SharedPreferences prefs = requireActivity().getSharedPreferences("AppPreferences", Context.MODE_PRIVATE);
         int displayOption = prefs.getInt("display_option", 2); // Default to "Everything"
 
         // Update the time
@@ -726,7 +1077,6 @@ public class HomeFragment extends Fragment {
         tvDateArabic.setText(displayOption == 2 ? currentDateArabic : "");
     }
 
-
     private void updateStorageInfo() {
         Log.d(TAG, "updateStorageInfo: Updating storage information");
         StatFs stat = new StatFs(Environment.getExternalStorageDirectory().getPath());
@@ -743,7 +1093,7 @@ public class HomeFragment extends Fragment {
         bytesAvailable -= estimatedBytesUsed;
         gbAvailable = Math.max(0, bytesAvailable / (1024.0 * 1024.0 * 1024.0));
 
-// Calculate remaining recording time based on available space and bitrate
+        // Calculate remaining recording time based on available space and bitrate
         long remainingTime = (videoBitrate > 0) ? (bytesAvailable * 8) / videoBitrate * 2 : 0; // Double the remaining time        // Calculate days, hours, minutes, and seconds for remaining time
         long days = remainingTime / (24 * 3600);
         long hours = (remainingTime % (24 * 3600)) / 3600;
@@ -796,24 +1146,23 @@ public class HomeFragment extends Fragment {
 
     //    update storage and stats in real time while recording is started
     private void startUpdatingInfo() {
-        Log.d(TAG, "startUpdatingInfo: Beginning real-time updates");
         updateInfoRunnable = new Runnable() {
             @Override
             public void run() {
-                if (isRecording) {
+                if (isRecording() && isAdded()) {
                     updateStorageInfo();
                     updateStats();
-                    handler.postDelayed(this, 1000); // Update every 3 seconds
+                    handlerClock.postDelayed(this, 1000); // Update every second
                 }
             }
         };
-        handler.post(updateInfoRunnable);
+        handlerClock.post(updateInfoRunnable);
     }
 
     private void stopUpdatingInfo() {
         Log.d(TAG, "stopUpdatingInfo: Stopping real-time updates");
         if (updateInfoRunnable != null) {
-            handler.removeCallbacks(updateInfoRunnable);
+            handlerClock.removeCallbacks(updateInfoRunnable);
             updateInfoRunnable = null;
         }
     }
@@ -828,7 +1177,7 @@ public class HomeFragment extends Fragment {
         currentTip = tips[currentTipIndex];
         typingIndex = 0;
         isTypingIn = true;
-//        animateTip(); this line is giving errors so i commented it
+        // animateTip(); this line is giving errors so i commented it
     }
 
     private void animateTip(String fullText, TextView textView, int delay) {
@@ -852,10 +1201,9 @@ public class HomeFragment extends Fragment {
         handler.post(runnable);
     }
 
-
     private void updateStats() {
         Log.d(TAG, "updateStats: Updating video statistics");
-        File recordsDir = new File(getContext().getExternalFilesDir(null), "FadCam");
+        File recordsDir = new File(requireContext().getExternalFilesDir(null), Constants.RECORDING_DIRECTORY);
         int numVideos = 0;
         long totalSize = 0;
 
@@ -863,7 +1211,7 @@ public class HomeFragment extends Fragment {
             File[] files = recordsDir.listFiles();
             if (files != null) {
                 for (File file : files) {
-                    if (file.isFile() && file.getName().endsWith(".mp4")) {
+                    if (file.isFile() && file.getName().endsWith("." + Constants.RECORDING_FILE_EXTENSION)) {
                         numVideos++;
                         totalSize += file.length();
                     }
@@ -880,677 +1228,65 @@ public class HomeFragment extends Fragment {
 
     private void pauseRecording() {
         Log.d(TAG, "pauseRecording: Pausing video recording");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            mediaRecorder.pause();
-            isPaused = true;
-            buttonPauseResume.setText(R.string.button_resume);
-            buttonPauseResume.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play, 0, 0, 0);
-        }
+
+        buttonPauseResume.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_play));
+        buttonPauseResume.setEnabled(false);
+
+        buttonCamSwitch.setEnabled(false);
+
+        Intent stopIntent = new Intent(getActivity(), RecordingService.class);
+        stopIntent.setAction(Constants.INTENT_ACTION_PAUSE_RECORDING);
+        requireActivity().startService(stopIntent);
     }
 
     private void resumeRecording() {
         Log.d(TAG, "resumeRecording: Resuming video recording");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            mediaRecorder.resume();
-            isPaused = false;
-            buttonPauseResume.setText(getString(R.string.button_pause));
-            buttonPauseResume.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_pause, 0, 0, 0);
-        }
-    }
 
+        buttonPauseResume.setIcon(AppCompatResources.getDrawable(requireContext(), R.drawable.ic_pause));
+        buttonPauseResume.setEnabled(false);
 
-    private BroadcastReceiver recordingStateReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if ("RECORDING_STATE_CHANGED".equals(intent.getAction())) {
-                boolean isRecording = intent.getBooleanExtra("isRecording", false);
-                if (isRecording) {
-                    buttonStartStop.setText(getString(R.string.button_stop));
-                    buttonStartStop.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_stop, 0, 0, 0);
-                    buttonPauseResume.setEnabled(true);
-                    tvPreviewPlaceholder.setVisibility(View.GONE);
-                    textureView.setVisibility(View.VISIBLE);
-                } else {
-                    buttonStartStop.setText(getString(R.string.button_start));
-                    buttonStartStop.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play, 0, 0, 0);
-                    buttonPauseResume.setEnabled(false);
-                    tvPreviewPlaceholder.setVisibility(View.VISIBLE);
-                    textureView.setVisibility(View.GONE);
-                }
-            }
-        }
-    };
-
-
-    private void startRecording() {
-        Log.d(TAG, "startRecording: Initiating video recording from home fragment");
-
-        // Set up the camera and MediaRecorder here
-        if (!isRecording) {
-            resetTimers();
-            if (cameraDevice == null) {
-                openCamera();
-            } else {
-                startRecordingVideo();
-            }
-            recordingStartTime = SystemClock.elapsedRealtime();
-            setVideoBitrate();
-
-            buttonStartStop.setText(getString(R.string.button_stop));
-            buttonStartStop.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_stop, 0, 0, 0);
-            buttonPauseResume.setEnabled(true);
-            tvPreviewPlaceholder.setVisibility(View.GONE);
-            textureView.setVisibility(View.VISIBLE);
-
-            startUpdatingInfo();
-            isRecording = true;
-            updatePreviewVisibility();
-
-            // Start the recording service
-            Intent startIntent = new Intent(getActivity(), RecordingService.class);
-            startIntent.setAction("ACTION_START_RECORDING");
-            getActivity().startService(startIntent);
-        }
-    }
-
-
-//recording service section
-//    private void startRecording() {
-//        Log.d(TAG, "startRecording: Initiating video recording from home fragment");
-//
-//        Intent startIntent = new Intent(getActivity(), RecordingService.class);
-//        startIntent.setAction("ACTION_START_RECORDING");
-//        getActivity().startService(startIntent);
-//
-//        if (!isRecording) {
-//            resetTimers();
-//            if (cameraDevice == null) {
-//                openCamera();
-//            } else {
-//                startRecordingVideo();
-//            }
-//            recordingStartTime = SystemClock.elapsedRealtime();
-//            setVideoBitrate();
-//
-//            buttonStartStop.setText("Stop");
-//            buttonStartStop.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_stop, 0, 0, 0);
-//            buttonPauseResume.setEnabled(true);
-//            tvPreviewPlaceholder.setVisibility(View.GONE);
-//            textureView.setVisibility(View.VISIBLE);
-//
-//            startUpdatingInfo();
-//            isRecording = true;
-//            updatePreviewVisibility();
-//        }
-//    }
-
-    private void setVideoBitrate() {
-        String selectedQuality = sharedPreferences.getString(Constantes.PREF_VIDEO_QUALITY, QUALITY_HD);
-        switch (selectedQuality) {
-            case QUALITY_SD:
-                videoBitrate = 1000000; // 1 Mbps
-                break;
-            case QUALITY_HD:
-                videoBitrate = 5000000; // 5 Mbps
-                break;
-            case QUALITY_FHD:
-                videoBitrate = 10000000; // 10 Mbps
-                break;
-            default:
-                videoBitrate = 5000000; // Default to HD
-                break;
-        }
-        Log.d(TAG, "setVideoBitrate: Set to " + videoBitrate + " bps");
-    }
-
-    private String getCameraSelection() {
-        return sharedPreferences.getString(Constantes.PREF_CAMERA_SELECTION, Constantes.CAMERA_BACK);
-    }
-
-    private String getCameraQuality() {
-        return sharedPreferences.getString(Constantes.PREF_VIDEO_QUALITY, QUALITY_HD);
-    }
-
-    private void closeCamera() {
-        if (cameraDevice != null) {
-            cameraDevice.close();
-            cameraDevice = null;
-        }
-    }
-
-    private void openCamera() {
-        Log.d(TAG, "openCamera: Opening camera");
-        CameraManager manager = (CameraManager) getActivity().getSystemService(Context.CAMERA_SERVICE);
-        try {
-            String[] cameraIdList = manager.getCameraIdList();
-            cameraId = getCameraSelection().equals(Constantes.CAMERA_FRONT) ? cameraIdList[1] : cameraIdList[0];
-            manager.openCamera(cameraId, new CameraDevice.StateCallback() {
-                @Override
-                public void onOpened(@NonNull CameraDevice camera) {
-                    Log.d(TAG, "onOpened: Camera opened successfully");
-                    cameraDevice = camera;
-                    startRecordingVideo();
-                }
-
-                @Override
-                public void onDisconnected(@NonNull CameraDevice camera) {
-                    Log.w(TAG, "onDisconnected: Camera disconnected");
-                    cameraDevice.close();
-                }
-
-                @Override
-                public void onError(@NonNull CameraDevice camera, int error) {
-                    Log.e(TAG, "onError: Camera error: " + error);
-                    cameraDevice.close();
-                    cameraDevice = null;
-                }
-            }, null);
-        } catch (CameraAccessException | SecurityException e) {
-            Log.e(TAG, "openCamera: Error opening camera", e);
-            e.printStackTrace();
-        }
-    }
-
-    private void startRecordingVideo() {
-        Log.d(TAG, "startRecordingVideo: Setting up video recording preview area");
         buttonCamSwitch.setEnabled(false);
 
-        // Check if TextureView is available before starting recording
-        if (!textureView.isAvailable()) {
-            tvPreviewPlaceholder.setVisibility(View.VISIBLE);
-            textureView.setVisibility(View.VISIBLE);
-            openCamera();
-            Log.e(TAG, "startRecordingVideo: TextureView is now available             550");
+        SurfaceTexture surfaceTexture = textureView.getSurfaceTexture();
+
+        Intent recordingServiceIntent = new Intent(getActivity(), RecordingService.class);
+        recordingServiceIntent.setAction(Constants.INTENT_ACTION_RESUME_RECORDING);
+        if(surfaceTexture != null) {
+            recordingServiceIntent.putExtra("SURFACE", new Surface(surfaceTexture));
         }
-
-        if (null == cameraDevice || !textureView.isAvailable() || !Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) {
-            Log.e(TAG, "startRecordingVideo: Unable to start recording due to missing prerequisites");
-            return;
-        }
-        try {
-            Log.e(TAG, "startRecordingVideo: TextureView found, success             556+");
-            setupMediaRecorder();
-            SurfaceTexture texture = textureView.getSurfaceTexture();
-            assert texture != null;
-            texture.setDefaultBufferSize(720, 1080);
-            Surface previewSurface = new Surface(texture);
-            Surface recorderSurface = mediaRecorder.getSurface();
-            captureRequestBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
-// below line of code is to show the preview screen.
-//            captureRequestBuilder.addTarget(previewSurface);
-            if (isPreviewEnabled) {
-                captureRequestBuilder.addTarget(previewSurface);
-            }
-            captureRequestBuilder.addTarget(recorderSurface);
-
-            int selectedFramerate = sharedPreferences.getInt(Constantes.PREF_VIDEO_FRAMERATE, Constantes.DEFAULT_VIDEO_FRAMERATE);
-
-            // Define framerate
-            Range<Integer> fpsRange = Range.create(selectedFramerate, selectedFramerate);
-            captureRequestBuilder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange);
-
-            cameraDevice.createCaptureSession(Arrays.asList(previewSurface, recorderSurface),
-                    new CameraCaptureSession.StateCallback() {
-                        @Override
-                        public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
-                            Log.d(TAG, "onConfigured: Camera capture session configured");
-                            HomeFragment.this.cameraCaptureSession = cameraCaptureSession;
-                            try {
-                                cameraCaptureSession.setRepeatingRequest(captureRequestBuilder.build(), null, null);
-                            } catch (CameraAccessException e) {
-                                Log.e(TAG, "onConfigured: Error setting repeating request", e);
-                                e.printStackTrace();
-                            }
-                            mediaRecorder.start();
-                            getActivity().runOnUiThread(() -> {
-                                // Haptic Feedback
-                                vibrateTouch();
-                                isRecording = true;
-                                Toast.makeText(getContext(), R.string.video_recording_started, Toast.LENGTH_SHORT).show();
-                            });
-                        }
-
-                        @Override
-                        public void onConfigureFailed(@NonNull CameraCaptureSession session) {
-                            Log.e(TAG, "onConfigureFailed: Failed to configure camera capture session");
-                            Toast.makeText(getContext(), "Failed to start recording", Toast.LENGTH_SHORT).show();
-                        }
-                    }, null);
-        } catch (CameraAccessException e) {
-            Log.e(TAG, "startRecordingVideo: Camera access exception", e);
-            e.printStackTrace();
-        }
+        requireActivity().startService(recordingServiceIntent);
     }
 
-    private void setupMediaRecorder() {
-        /*
-         * This method sets up the MediaRecorder for video recording.
-         * It creates a directory for saving videos if it doesn't exist,
-         * generates a timestamp-based filename, and configures the
-         * MediaRecorder with the appropriate settings based on the
-         * selected video quality (SD, HD, FHD). It reduces bitrates
-         * by 50% using the HEVC (H.265) encoder for efficient compression
-         * without significantly affecting video quality.
-         *
-         * - SD: 640x480 @ 0.5 Mbps
-         * - HD: 1280x720 @ 2.5 Mbps
-         * - FHD: 1920x1080 @ 5 Mbps
-         *
-         * It also adjusts the frame rate, sets audio settings, and configures
-         * the orientation based on the camera selection (front or rear).
-         */
-
-        try {
-            // Create directory for saving videos if it doesn't exist
-            File videoDir = new File(requireActivity().getExternalFilesDir(null), "FadCam");
-            if (!videoDir.exists()) {
-                videoDir.mkdirs();
-            }
-
-            // Generate a timestamp-based filename for the video
-            String timestamp = new SimpleDateFormat("yyyyMMdd_hh_mm_ssa", Locale.getDefault()).format(new Date());
-            File videoFile = new File(videoDir, "temp_" + timestamp + ".mp4");
-
-            // Initialize MediaRecorder
-            mediaRecorder = new MediaRecorder();
-            mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-            mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-            mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-            mediaRecorder.setOutputFile(videoFile.getAbsolutePath());
-
-            // Select video quality and adjust size and bitrate
-            String selectedQuality = sharedPreferences.getString(Constantes.PREF_VIDEO_QUALITY, QUALITY_HD);
-            switch (selectedQuality) {
-                case QUALITY_SD:
-                    // SD: 640x480 resolution, 0.5 Mbps (50% of original 1 Mbps)
-                    mediaRecorder.setVideoSize(640, 480);
-                    mediaRecorder.setVideoEncodingBitRate(500000);
-                    break;
-                case QUALITY_HD:
-                    // HD: 1280x720 resolution, 2.5 Mbps (50% of original 5 Mbps)
-                    mediaRecorder.setVideoSize(1280, 720);
-                    mediaRecorder.setVideoEncodingBitRate(2500000);
-                    break;
-                case QUALITY_FHD:
-                    // FHD: 1920x1080 resolution, 5 Mbps (50% of original 10 Mbps)
-                    mediaRecorder.setVideoSize(1920, 1080);
-                    mediaRecorder.setVideoEncodingBitRate(5000000);
-                    break;
-                default:
-                    // Default to HD settings
-                    mediaRecorder.setVideoSize(1280, 720);
-                    mediaRecorder.setVideoEncodingBitRate(2500000);
-                    break;
-            }
-
-            // Set frame rate and capture rate
-            int selectedFramerate = sharedPreferences.getInt(Constantes.PREF_VIDEO_FRAMERATE, Constantes.DEFAULT_VIDEO_FRAMERATE);
-            mediaRecorder.setVideoFrameRate(selectedFramerate);
-            mediaRecorder.setCaptureRate(selectedFramerate);
-
-            // Audio settings: high-quality audio
-            mediaRecorder.setAudioEncodingBitRate(384000);
-            mediaRecorder.setAudioSamplingRate(48000);
-            mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-
-            // Set video encoder to HEVC (H.265) for better compression
-            mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.HEVC);
-
-            // Set orientation based on camera selection
-            if (getCameraSelection().equals(Constantes.CAMERA_FRONT)) {
-                mediaRecorder.setOrientationHint(270);
-            } else {
-                mediaRecorder.setOrientationHint(90);
-            }
-
-            // Prepare MediaRecorder
-            mediaRecorder.prepare();
-
-        } catch (IOException e) {
-            Log.e(TAG, "setupMediaRecorder: Error setting up media recorder", e);
-            e.printStackTrace();
-        }
+    private void setVideoBitrate() {
+        videoBitrate = Utils.estimateBitrate(sharedPreferencesManager.getCameraResolution(), sharedPreferencesManager.getVideoFrameRate());
+        Log.d(TAG, "setVideoBitrate: Set to " + videoBitrate + " bps");
     }
-
-
-    private String extractTimestamp(String filename) {
-        // Assuming filename format is "prefix_TIMESTAMP.mp4"
-        // Example: "temp_20240730_01_39_26PM.mp4"
-        // Extracting timestamp part: "20240730_01_39_26PM"
-        int startIndex = filename.indexOf('_') + 1;
-        int endIndex = filename.lastIndexOf('.');
-        return filename.substring(startIndex, endIndex);
-    }
-
-
-    private void checkAndDeleteSpecificTempFile() {
-        if (tempFileBeingProcessed != null) {
-            String tempTimestamp = extractTimestamp(tempFileBeingProcessed.getName());
-
-            // Construct FADCAM_ filename with the same timestamp
-            String outputFilePath = tempFileBeingProcessed.getParent() + "/FADCAM_" + tempFileBeingProcessed.getName().replace("temp_", "");
-            File outputFile = new File(outputFilePath);
-
-            // Check if the FADCAM_ file exists
-            if (outputFile.exists()) {
-                // Delete temp file
-                if (tempFileBeingProcessed.delete()) {
-                    Log.d(TAG, "Temp file deleted successfully.");
-                } else {
-                    Log.e(TAG, "Failed to delete temp file.");
-                }
-                // Reset tempFileBeingProcessed to null after deletion
-                tempFileBeingProcessed = null;
-            } else {
-                // FADCAM_ file does not exist yet
-                Log.d(TAG, "Matching FADCAM_ file not found. Temp file remains.");
-            }
-        }
-    }
-
-
-    private void startMonitoring() {
-        final long CHECK_INTERVAL_MS = 1000; // 1 second
-
-        Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(() -> {
-            checkAndDeleteSpecificTempFile();
-        }, 0, CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
-    }
-
 
     private void stopRecording() {
         Log.d(TAG, "stopRecording: Stopping video recording");
 
+        // Release wake lock when recording stops
+        releaseWakeLock();
+
+        buttonPauseResume.setEnabled(false);
+        buttonStartStop.setEnabled(false);
+        buttonCamSwitch.setEnabled(false);
+
         // Stop the recording service
         Intent stopIntent = new Intent(getActivity(), RecordingService.class);
-        stopIntent.setAction("ACTION_STOP_RECORDING");
-        getActivity().startService(stopIntent);
+        stopIntent.setAction(Constants.INTENT_ACTION_STOP_RECORDING);
+        requireActivity().startService(stopIntent);
 
-        if (isRecording) {
-            try {
-                cameraCaptureSession.stopRepeating();
-                cameraCaptureSession.abortCaptures();
-                releaseCamera();
-                vibrateTouch();
-                Toast.makeText(getContext(), R.string.video_recording_stopped, Toast.LENGTH_SHORT).show();
-
-                // Add watermarking here if necessary
-                // Get the latest video file
-                File latestVideoFile = getLatestVideoFile();
-                if (latestVideoFile != null) {
-                    String inputFilePath = latestVideoFile.getAbsolutePath();
-                    String originalFileName = latestVideoFile.getName().replace("temp_", "");
-                    String outputFilePath = latestVideoFile.getParent() + "/FADCAM_" + originalFileName;
-                    Log.d(TAG, "Watermarking: Input file path: " + inputFilePath);
-                    Log.d(TAG, "Watermarking: Output file path: " + outputFilePath);
-
-                    tempFileBeingProcessed = latestVideoFile;
-                    addTextWatermarkToVideo(inputFilePath, outputFilePath);
-                } else {
-                    Log.e(TAG, "No video file found.");
-                }
-
-                isRecording = false;
-                buttonStartStop.setText(getString(R.string.button_start));
-                buttonStartStop.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play, 0, 0, 0);
-                buttonPauseResume.setEnabled(false);
-                tvPreviewPlaceholder.setVisibility(View.VISIBLE);
-                textureView.setVisibility(View.INVISIBLE);
-                stopUpdatingInfo();
-                updateStorageInfo();
-            } catch (CameraAccessException | IllegalStateException e) {
-                Log.e(TAG, "stopRecording: Error stopping recording", e);
-                e.printStackTrace();
-            }
-            isRecording = false;
-            updatePreviewVisibility();
-        }
-        buttonCamSwitch.setEnabled(true);
+        vibrateTouch();
     }
-
-
-//recording service section
-//    private void stopRecording() {
-//        Log.d(TAG, "stopRecording: Stopping video recording");
-//
-//        Intent stopIntent = new Intent(getActivity(), RecordingService.class);
-//        stopIntent.setAction("ACTION_STOP_RECORDING");
-//        getActivity().startService(stopIntent);
-//
-//        if (isRecording) {
-//            try {
-//                cameraCaptureSession.stopRepeating();
-//                cameraCaptureSession.abortCaptures();
-//                mediaRecorder.stop();
-//                mediaRecorder.reset();
-//                // Haptic Feedback
-//                vibrateTouch();
-//                Toast.makeText(getContext(), "Recording stopped", Toast.LENGTH_SHORT).show();
-//            } catch (CameraAccessException | IllegalStateException e) {
-//                Log.e(TAG, "stopRecording: Error stopping recording", e);
-//                e.printStackTrace();
-//            }
-//// below lines are new
-//            // Add watermarking here
-//            // Get the latest video file
-//            File latestVideoFile = getLatestVideoFile();
-//            if (latestVideoFile != null) {
-//                // Prepare file paths
-//                String inputFilePath = latestVideoFile.getAbsolutePath();
-//
-//                // Remove 'temp_' prefix from the file name to get the original name
-//                String originalFileName = latestVideoFile.getName().replace("temp_", "");
-//
-//                // Create output file path with 'FADCAM_' prefix
-//                String outputFilePath = latestVideoFile.getParent() + "/FADCAM_" + originalFileName;
-//                Log.d(TAG, "Watermarking: Input file path: " + inputFilePath);
-//                Log.d(TAG, "Watermarking: Output file path: " + outputFilePath);
-//
-//                // Track the temp file being processed
-//                tempFileBeingProcessed = latestVideoFile;
-//
-//                // Add text watermark to the recorded video
-//                addTextWatermarkToVideo(inputFilePath, outputFilePath);
-//            } else {
-//                Log.e(TAG, "No video file found.");
-//            }
-//
-//
-//            releaseCamera();
-//            isRecording = false;
-//            buttonStartStop.setText("Start");
-//            buttonStartStop.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_play, 0, 0, 0);
-//            buttonPauseResume.setEnabled(false);
-//            tvPreviewPlaceholder.setVisibility(View.VISIBLE);
-//            textureView.setVisibility(View.INVISIBLE);
-//            stopUpdatingInfo();
-//            updateStorageInfo(); // Final update with actual values
-//
-//            // Start monitoring temp files
-////            startMonitoring();
-//        }
-//        isRecording = false;
-//        updatePreviewVisibility();
-//    }
-
-    private void releaseCamera() {
-        Log.d(TAG, "releaseCamera: Releasing camera resources");
-        if (cameraDevice != null) {
-            cameraDevice.close();
-            cameraDevice = null;
-        }
-        if (mediaRecorder != null) {
-            mediaRecorder.release();
-            mediaRecorder = null;
-        }
-        cameraCaptureSession = null;
-        captureRequestBuilder = null;
-    }
-
-// below methods are new
-
-    private File getLatestVideoFile() {
-        File videoDir = new File(requireActivity().getExternalFilesDir(null), "FadCam");
-        File[] files = videoDir.listFiles();
-        if (files == null || files.length == 0) {
-            return null;
-        }
-
-        // Sort files by last modified date
-        Arrays.sort(files, (f1, f2) -> Long.compare(f2.lastModified(), f1.lastModified()));
-        return files[0]; // Return the most recently modified file
-    }
-
-
-    private void addTextWatermarkToVideo(String inputFilePath, String outputFilePath) {
-        String fontPath = getContext().getFilesDir().getAbsolutePath() + "/ubuntu_regular.ttf";
-        String watermarkText;
-        String watermarkOption = getWatermarkOption();
-
-        boolean isLocationEnabled = sharedPreferences.getBoolean(PREF_LOCATION_DATA, false);
-        String locationText = isLocationEnabled ? locationHelper.getLocationData() : "";
-
-        switch (watermarkOption) {
-            case "timestamp_fadcam":
-                watermarkText = "Captured by FadCam - " + getCurrentTimestamp() + (isLocationEnabled ? "" + locationText : "");
-                break;
-            case "timestamp":
-                watermarkText = getCurrentTimestamp() + (isLocationEnabled ? "" + locationText : "");
-                break;
-            case "no_watermark":
-                String ffmpegCommandNoWatermark = String.format("-i %s -codec copy %s", inputFilePath, outputFilePath);
-                executeFFmpegCommand(ffmpegCommandNoWatermark);
-                return;
-            default:
-                watermarkText = "Captured by FadCam - " + getCurrentTimestamp() + (isLocationEnabled ? "" + locationText : "");
-                break;
-        }
-
-        // Convert the watermark text to English numerals
-        watermarkText = convertArabicNumeralsToEnglish(watermarkText);
-
-        // Get and convert the font size to English numerals
-        int fontSize = getFontSizeBasedOnBitrate();
-        String fontSizeStr = convertArabicNumeralsToEnglish(String.valueOf(fontSize));
-
-        Log.d(TAG, "Watermark Text: " + watermarkText);
-        Log.d(TAG, "Font Path: " + fontPath);
-        Log.d(TAG, "Font Size: " + fontSizeStr);
-
-        // Construct the FFmpeg command
-        String ffmpegCommand = String.format(
-                "-i %s -vf \"drawtext=text='%s':x=10:y=10:fontsize=%s:fontcolor=white:fontfile=%s\" -q:v 0 -codec:a copy %s",
-                inputFilePath, watermarkText, fontSizeStr, fontPath, outputFilePath
-        );
-
-        executeFFmpegCommand(ffmpegCommand);
-    }
-
-
-
-    private int getFontSizeBasedOnBitrate() {
-        int fontSize;
-        int videoBitrate = getVideoBitrate(); // Ensure this method retrieves the correct bitrate based on the selected quality
-
-        if (videoBitrate <= 1000000) {
-            fontSize = 12; //SD quality
-        } else if (videoBitrate == 10000000) {
-            fontSize = 24; // FHD quality
-        } else {
-            fontSize = 16; // HD or higher quality
-        }
-
-        Log.d(TAG, "Determined Font Size: " + fontSize);
-        return fontSize;
-    }
-
-    private int getVideoBitrate() {
-        String selectedQuality = sharedPreferences.getString(Constantes.PREF_VIDEO_QUALITY, QUALITY_HD);
-        int bitrate;
-        switch (selectedQuality) {
-            case QUALITY_SD:
-                bitrate = 1000000; // 1 Mbps
-                break;
-            case QUALITY_HD:
-                bitrate = 5000000; // 5 Mbps
-                break;
-            case QUALITY_FHD:
-                bitrate = 10000000; // 10 Mbps
-                break;
-            default:
-                bitrate = 5000000; // Default to HD
-                break;
-        }
-        Log.d(TAG, "Selected Video Bitrate: " + bitrate + " bps");
-        return bitrate;
-    }
-
-    private void executeFFmpegCommand(String ffmpegCommand) {
-        Log.d(TAG, "FFmpeg Command: " + ffmpegCommand);
-        FFmpegKit.executeAsync(ffmpegCommand, new ExecuteCallback() {
-            @Override
-            public void apply(Session session) {
-                if (session.getReturnCode().isSuccess()) {
-                    Log.d(TAG, "Watermark added successfully.");
-                    // Start monitoring temp files
-                    startMonitoring();
-
-                    // Notify the adapter to update the thumbnail
-                    File latestVideo = getLatestVideoFile();
-                    if (latestVideo != null) {
-                        String videoFilePath = latestVideo.getAbsolutePath();
-                        updateThumbnailInAdapter(videoFilePath);
-                    }
-
-                } else {
-                    Log.e(TAG, "Failed to add watermark: " + session.getFailStackTrace());
-                }
-            }
-        });
-    }
-
-    private void updateThumbnailInAdapter(String videoFilePath) {
-        if (adapter != null) {
-            adapter.notifyDataSetChanged(); // Notify adapter that data has changed
-        }
-    }
-
-
-    private String getCurrentTimestamp() {
-        SimpleDateFormat sdf = new SimpleDateFormat("dd/MMM/yyyy hh-mm a", Locale.ENGLISH);
-        return convertArabicNumeralsToEnglish(sdf.format(new Date()));
-    }
-
-
-    private String convertArabicNumeralsToEnglish(String text) {
-        if (text == null) return null;
-        return text.replaceAll("٠", "0")
-                .replaceAll("١", "1")
-                .replaceAll("٢", "2")
-                .replaceAll("٣", "3")
-                .replaceAll("٤", "4")
-                .replaceAll("٥", "5")
-                .replaceAll("٦", "6")
-                .replaceAll("٧", "7")
-                .replaceAll("٨", "8")
-                .replaceAll("٩", "9");
-    }
-
-
-
-    private String getWatermarkOption() {
-        SharedPreferences sharedPreferences = requireActivity().getPreferences(Context.MODE_PRIVATE);
-        return sharedPreferences.getString("watermark_option", "timestamp_fadcam");
-    }
-
 
     private void copyFontToInternalStorage() {
-        AssetManager assetManager = getContext().getAssets();
+        AssetManager assetManager = requireContext().getAssets();
         InputStream in = null;
         OutputStream out = null;
         try {
             in = assetManager.open("ubuntu_regular.ttf");
-            File outFile = new File(getContext().getFilesDir(), "ubuntu_regular.ttf");
+            File outFile = new File(requireContext().getFilesDir(), "ubuntu_regular.ttf");
             out = new FileOutputStream(outFile);
             copyFile(in, out);
             Log.d(TAG, "Font copied to internal storage.");
@@ -1574,15 +1310,13 @@ public class HomeFragment extends Fragment {
         }
     }
 
-
     public void switchCamera() {
-        String currentCameraSelection = sharedPreferences.getString(Constantes.PREF_CAMERA_SELECTION, Constantes.CAMERA_BACK);
-        if (currentCameraSelection.equals(Constantes.CAMERA_BACK)) {
-            sharedPreferences.edit().putString(Constantes.PREF_CAMERA_SELECTION, Constantes.CAMERA_FRONT).apply();
+        if (sharedPreferencesManager.getCameraSelection().equals(CameraType.BACK)) {
+            sharedPreferencesManager.sharedPreferences.edit().putString(Constants.PREF_CAMERA_SELECTION, CameraType.FRONT.toString()).apply();
             Log.d(TAG, "Camera set to front");
             Toast.makeText(getContext(), R.string.switched_front_camera, Toast.LENGTH_SHORT).show();
         } else {
-            sharedPreferences.edit().putString(Constantes.PREF_CAMERA_SELECTION, Constantes.CAMERA_BACK).apply();
+            sharedPreferencesManager.sharedPreferences.edit().putString(Constants.PREF_CAMERA_SELECTION, CameraType.BACK.toString()).apply();
             Log.d(TAG, "Camera set to rear");
             Toast.makeText(getContext(), R.string.switched_rear_camera, Toast.LENGTH_SHORT).show();
         }
@@ -1613,7 +1347,6 @@ public class HomeFragment extends Fragment {
 //        }
 //    }
 
-
     private void copyFile(InputStream in, OutputStream out) throws IOException {
         byte[] buffer = new byte[1024];
         int read;
@@ -1622,38 +1355,282 @@ public class HomeFragment extends Fragment {
         }
     }
 
-    private void setupStartStopButton()
-    {
-        if (!CamcorderProfile.hasProfile(1, CamcorderProfile.QUALITY_1080P) && getCameraSelection().equals(Constantes.CAMERA_FRONT) && getCameraQuality().equals(QUALITY_FHD)) {
-            buttonStartStop.setEnabled(false);
-        }
-        else if (!CamcorderProfile.hasProfile(1, CamcorderProfile.QUALITY_720P) && getCameraSelection().equals(Constantes.CAMERA_FRONT) && getCameraQuality().equals(QUALITY_HD)) {
-            buttonStartStop.setEnabled(false);
-        }
-        else if (!CamcorderProfile.hasProfile(1, CamcorderProfile.QUALITY_VGA) && !CamcorderProfile.hasProfile(1, CamcorderProfile.QUALITY_480P) && getCameraSelection().equals(Constantes.CAMERA_FRONT) && getCameraQuality().equals(QUALITY_SD)) {
-            buttonStartStop.setEnabled(false);
-        }
-        else if (!CamcorderProfile.hasProfile(0, CamcorderProfile.QUALITY_1080P) && getCameraSelection().equals(Constantes.CAMERA_BACK) && getCameraQuality().equals(QUALITY_FHD)) {
-            buttonStartStop.setEnabled(false);
-        }
-        else if (!CamcorderProfile.hasProfile(0, CamcorderProfile.QUALITY_720P) && getCameraSelection().equals(Constantes.CAMERA_BACK) && getCameraQuality().equals(QUALITY_HD)) {
-            buttonStartStop.setEnabled(false);
-        }
-        else if (!CamcorderProfile.hasProfile(0, CamcorderProfile.QUALITY_VGA) && !CamcorderProfile.hasProfile(0, CamcorderProfile.QUALITY_480P) && getCameraSelection().equals(Constantes.CAMERA_BACK) && getCameraQuality().equals(QUALITY_SD)) {
-            buttonStartStop.setEnabled(false);
-        }
-        else {
-            buttonStartStop.setEnabled(true);
-        }
-    }
-
-
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        Log.d(TAG, "onDestroyView: Cleaning up resources");
+        TorchService.setHomeFragment(null);
+        
+        // Safely unregister the torch receiver
+        if (torchReceiver != null) {
+            try {
+                requireContext().unregisterReceiver(torchReceiver);
+            } catch (IllegalArgumentException e) {
+                Log.w(TAG, "Torch receiver was not registered or already unregistered");
+            }
+            torchReceiver = null;
+        }
+        
         stopUpdatingInfo();
         stopUpdatingClock();
-        releaseCamera();
+    }
+
+    public boolean isRecording() {
+        return recordingState.equals(RecordingState.IN_PROGRESS);
+    }
+
+    public boolean isPaused() {
+        return recordingState.equals(RecordingState.PAUSED);
+    }
+
+    private void initializeTorch() {
+        cameraManager = (CameraManager) requireContext().getSystemService(Context.CAMERA_SERVICE);
+        try {
+            cameraId = getCameraWithFlash();
+            if (cameraId == null) {
+                Log.d(TAG, "No camera with flash found");
+                buttonTorchSwitch.setEnabled(false);
+                buttonTorchSwitch.setVisibility(View.GONE);
+            } else {
+                Log.d(TAG, "Flash available on camera: " + cameraId);
+                buttonTorchSwitch.setEnabled(true);
+                buttonTorchSwitch.setVisibility(View.VISIBLE);
+            }
+        } catch (CameraAccessException e) {
+            Log.e(TAG, "Camera access error: " + e.getMessage());
+            e.printStackTrace();
+            buttonTorchSwitch.setEnabled(false);
+            buttonTorchSwitch.setVisibility(View.GONE);
+        }
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private void setupTorchButton() {
+        buttonTorchSwitch = requireView().findViewById(R.id.buttonTorchSwitch);
+
+        // Set default torch source if none selected
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(requireContext());
+        if (prefs.getString(Constants.PREF_SELECTED_TORCH_SOURCE, null) == null) {
+            try {
+                String defaultTorchId = getCameraWithFlash();
+                if (defaultTorchId != null) {
+                    prefs.edit()
+                            .putString(Constants.PREF_SELECTED_TORCH_SOURCE, defaultTorchId)
+                            .putBoolean(Constants.PREF_BOTH_TORCHES_ENABLED, false)
+                            .apply();
+                }
+            } catch (CameraAccessException e) {
+                Log.e(TAG, "Error setting default torch source: " + e.getMessage());
+            }
+        }
+
+        // Setup click listener for torch toggle
+        buttonTorchSwitch.setOnClickListener(v -> {
+            Intent intent = new Intent(requireContext(), TorchService.class);
+            intent.setAction(Constants.INTENT_ACTION_TOGGLE_TORCH);
+            requireContext().startService(intent);
+            vibrateTouch();
+        });
+
+        // Setup long press listener
+        buttonTorchSwitch.setOnLongClickListener(v -> {
+            showTorchOptionsDialog();
+            vibrateTouch();
+            return true;
+        });
+
+        // Register torch state receiver
+        if (torchReceiver == null) {
+            try {
+                // First try to unregister any existing receiver
+                requireContext().unregisterReceiver(torchReceiver);
+            } catch (IllegalArgumentException e) {
+                // Ignore if not registered
+            }
+            
+            torchReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    if (Constants.BROADCAST_ON_TORCH_STATE_CHANGED.equals(intent.getAction())) {
+                        boolean torchState = intent.getBooleanExtra(Constants.INTENT_EXTRA_TORCH_STATE, false);
+                        isTorchOn = torchState;
+                        Log.d("TorchDebug", "Received broadcast - Torch state: " + torchState);
+                        
+                        requireActivity().runOnUiThread(() -> {
+                            try {
+                                buttonTorchSwitch.setIcon(AppCompatResources.getDrawable(
+                                    requireContext(),
+                                    R.drawable.ic_flashlight_on
+                                ));
+                                buttonTorchSwitch.setSelected(isTorchOn);
+                                buttonTorchSwitch.setEnabled(true);
+                            } catch (Exception e) {
+                                Log.e("TorchDebug", "Error updating torch icon: " + e.getMessage());
+                            }
+                        });
+                    }
+                }
+            };
+            
+            IntentFilter filter = new IntentFilter(Constants.BROADCAST_ON_TORCH_STATE_CHANGED);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                requireContext().registerReceiver(torchReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                requireContext().registerReceiver(torchReceiver, filter);
+            }
+        }
+    }
+
+    private void updateTorchButtonState(boolean isOn) {
+        if (buttonTorchSwitch != null) {
+            buttonTorchSwitch.setIcon(AppCompatResources.getDrawable(
+                requireContext(),
+                R.drawable.ic_flashlight_on
+            ));
+            buttonTorchSwitch.setEnabled(true);
+        }
+    }
+
+    private void showTorchOptionsDialog() {
+        // Check if recording is in progress first
+        if (isRecordingInProgress()) {
+            Toast.makeText(requireContext(), R.string.torch_recording_note, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        CameraManager cameraManager = (CameraManager) requireContext().getSystemService(Context.CAMERA_SERVICE);
+        try {
+            List<String> torchSources = new ArrayList<>();
+            boolean hasMultipleTorches = false;
+            boolean hasBackTorch = false;
+            boolean hasFrontTorch = false;
+
+            // Check available torch sources
+            for (String cameraId : cameraManager.getCameraIdList()) {
+                CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraId);
+                Boolean hasFlash = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
+                int facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+
+                if (hasFlash != null && hasFlash) {
+                    torchSources.add(cameraId);
+                    if (facing == CameraCharacteristics.LENS_FACING_BACK) {
+                        hasBackTorch = true;
+                    } else if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                        hasFrontTorch = true;
+                    }
+                }
+            }
+
+            hasMultipleTorches = hasBackTorch && hasFrontTorch;
+            Log.d(TAG, "Torch sources found: Back=" + hasBackTorch + ", Front=" + hasFrontTorch);
+
+            View dialogView = getLayoutInflater().inflate(R.layout.dialog_torch_options, null);
+            RadioGroup torchGroup = dialogView.findViewById(R.id.torch_group);
+
+            // Setup torch source options
+            SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(requireContext());
+            String currentTorchSource = prefs.getString(Constants.PREF_SELECTED_TORCH_SOURCE, null);
+            boolean currentBothTorches = prefs.getBoolean(Constants.PREF_BOTH_TORCHES_ENABLED, false);
+
+            // Add individual torch options
+            for (String sourceId : torchSources) {
+                RadioButton rb = new RadioButton(requireContext());
+                CameraCharacteristics chars = cameraManager.getCameraCharacteristics(sourceId);
+                int facing = chars.get(CameraCharacteristics.LENS_FACING);
+                rb.setText(facing == CameraCharacteristics.LENS_FACING_BACK ?
+                        getString(R.string.torch_back) : getString(R.string.torch_front));
+                rb.setTag(sourceId);
+                torchGroup.addView(rb);
+
+                if (sourceId.equals(currentTorchSource) && !currentBothTorches) {
+                    rb.setChecked(true);
+                }
+            }
+
+            // Add "Both Torches" option if multiple torches available
+            if (hasMultipleTorches) {
+                RadioButton bothTorches = new RadioButton(requireContext());
+                bothTorches.setText(R.string.torch_both);
+                bothTorches.setTag("both");
+                torchGroup.addView(bothTorches);
+
+                if (currentBothTorches) {
+                    bothTorches.setChecked(true);
+                }
+                Log.d(TAG, "Added 'Both Torches' option");
+            }
+
+            // Select first source if none selected
+            if (currentTorchSource == null && !currentBothTorches && torchGroup.getChildCount() > 0) {
+                ((RadioButton) torchGroup.getChildAt(0)).setChecked(true);
+            }
+
+            new MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(R.string.torch_options_title)
+                    .setView(dialogView)
+                    .setPositiveButton(R.string.torch_apply, (dialog, which) -> {
+                        RadioButton selectedSource = dialogView.findViewById(torchGroup.getCheckedRadioButtonId());
+                        if (selectedSource != null) {
+                            String selectedSourceId = (String) selectedSource.getTag();
+                            boolean isBothSelected = "both".equals(selectedSourceId);
+
+                            // Save settings
+                            SharedPreferences.Editor editor = prefs.edit();
+                            editor.putBoolean(Constants.PREF_BOTH_TORCHES_ENABLED, isBothSelected);
+                            if (!isBothSelected) {
+                                editor.putString(Constants.PREF_SELECTED_TORCH_SOURCE, selectedSourceId);
+                            }
+                            editor.apply();
+
+                            Log.d(TAG, "Saved torch settings - Both: " + isBothSelected +
+                                    ", Source: " + selectedSourceId);
+                        }
+                    })
+                    .setNegativeButton(R.string.torch_cancel, null)
+                    .show();
+
+        } catch (CameraAccessException e) {
+            Log.e(TAG, "Error accessing camera: " + e.getMessage());
+        }
+    }
+
+    private String getCameraWithFlash() throws CameraAccessException {
+        for (String id : cameraManager.getCameraIdList()) {
+            CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(id);
+            Boolean flashAvailable = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
+            if (flashAvailable != null && flashAvailable) {
+                Log.d(TAG, "Found camera with flash: " + id);
+                return id;
+            }
+        }
+        Log.d(TAG, "No camera with flash found");
+        return null;
+    }
+
+    private boolean isRecordingInProgress() {
+        ActivityManager manager = (ActivityManager) requireContext().getSystemService(Context.ACTIVITY_SERVICE);
+        for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
+            if (RecordingService.class.getName().equals(service.service.getClassName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void updateTorchUI(boolean isOn) {
+        if (isAdded() && getActivity() != null) {
+            getActivity().runOnUiThread(() -> {
+                try {
+                    buttonTorchSwitch.setIcon(AppCompatResources.getDrawable(
+                        requireContext(),
+                        R.drawable.ic_flashlight_on
+                    ));
+                    buttonTorchSwitch.setSelected(isOn);
+                    buttonTorchSwitch.setEnabled(true);
+                    Log.d("TorchDebug", "Torch UI updated, isOn: " + isOn);
+                } catch (Exception e) {
+                    Log.e("TorchDebug", "Error updating torch UI: " + e.getMessage());
+                }
+            });
+        }
     }
 }

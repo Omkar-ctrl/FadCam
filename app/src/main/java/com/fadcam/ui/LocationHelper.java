@@ -7,18 +7,16 @@ import android.location.Location;
 import android.util.Log;
 
 import org.osmdroid.util.GeoPoint;
+import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
 import org.osmdroid.views.overlay.mylocation.IMyLocationConsumer;
 import org.osmdroid.views.overlay.mylocation.IMyLocationProvider;
-import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider;
 
 public class LocationHelper {
 
-    private GpsMyLocationProvider provider;
-    private Context context;
+    private final GpsMyLocationProvider provider;
     private GeoPoint currentLocation;
 
     public LocationHelper(Context context) {
-        this.context = context;
         provider = new GpsMyLocationProvider(context);
 
         // Set a location update handler

@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "com.fadcam"
-    compileSdk = 34
+    compileSdk = 35
 
     splits {
         abi {
@@ -20,8 +20,8 @@ android {
         applicationId = "com.fadcam"
         minSdk = 24
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.1.3"
+        versionCode = 9
+        versionName = "1.2.1-beta"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -67,5 +67,5 @@ dependencies {
     implementation(libs.osmdroid.android)
     implementation(libs.osmdroid.wms)
 
-    implementation(libs.ffmpeg.kit.video)
+    implementation(libs.ffmpeg.kit.full)
 }

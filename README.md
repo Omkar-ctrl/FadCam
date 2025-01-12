@@ -12,7 +12,7 @@
 
 
 
-
+                
 
 
 
@@ -133,6 +133,7 @@ FadCam is developed with the goal of providing a powerful, privacy-focused tool 
 
 ### Featured Videos
 - [HowToMen on YouTube](https://youtu.be/gU9ddvtqL3E?si=6GpPO2fKQxT6RWKz&t=297)
+- [HowToMen 2nd feature :) ](https://youtu.be/3pOoU5JjfnE?si=JMwoHfGyocXuvkC7&t=520)
 - [Xtream Droid on YouTube](https://youtu.be/PImJehUqOC0?si=kQKrwk7kdHJT0_-8&t=238)
 - [Xtream Droid once again in Hindi](https://www.youtube.com/watch?v=smCMKih759I)
 - [Tech Quirk on YouTube](https://www.youtube.com/shorts/4cQ2RpWHess)
@@ -142,12 +143,21 @@ FadCam is developed with the goal of providing a powerful, privacy-focused tool 
 - [Adhip Pandey on YouTube](https://www.youtube.com/watch?v=ud0bu8U08Ic)
 - [Daniel Bueno - Tecnología on YouTube](https://www.youtube.com/watch?v=TuZBXJVPfOU)
 - [degeregi on TikTok](https://www.tiktok.com/@degereji/video/7403781470180920581)
+- [Anurag - The Geek](https://youtu.be/uXDQhGgjhDU?si=dgYo_wMAxiCM77R5&t=166)
+- [@ALHATEFALDHAKI on YouTube](https://www.youtube.com/watch?v=jOqnfL3mRks)
+- [@techtricks306 on YouTube](https://www.youtube.com/watch?v=3C2XM4YnlDY)
+- [Samfans VN on YouTube](https://www.youtube.com/watch?v=LSYKu51ibeI)
+- [Sam Beckman on YouTube](https://youtu.be/GujW6qMdVGg?si=WLQ5PyneHkUQvyB7)
+- [Sam Beckman 2nd Feature](https://youtu.be/E4Row0mFbfk?si=QLjgWyv5p3gO1giM&t=518)
+- [Tech In Hand on YouTube](https://youtu.be/OjuSXf5Dj8E?si=Ng6C7Ic_HZbzxWo5)
+- [AWAk3N on YouTube](https://youtu.be/B38XqQBT398?si=p7-jNVu-LxSXkNaF)
+<!-- - [Someone in comments mentioned about fadcam, on TikTok](https://www.tiktok.com/@unijpeg/video/7438464230807948600) -->
 <!-- - [Tech Knowing](https://youtu.be/5ZqjensX_XQ?si=iXIY4tMf1iBW9zoR) -->
 <!-- - [EI Tech - Emanuele Iafulla on YouTube](https://youtu.be/n8k9J4GnoCY?si=D6RVGSD832jOFhiQ) -->
 
 ### Articles and Listings
+- [fmhy.net](https://fmhy.net/android-iosguide#camera-tools)
 - [discuss.privacyguides.net](https://discuss.privacyguides.net/t/fadcam-open-source-cam-background-video-recording-even-when-the-screen-is-off/19823)
-- [computer-wd](https://www.computer-wd.com/2024/08/new-mobile-apps.html)
 - [appteka.com](https://appteka.store/app/bcdr185175)
 - [discuss.grapheneos.org](https://discuss.grapheneos.org/d/11667-what-featureapp-do-you-use-that-the-majority-never-talk-about/69)
 - [fmhy.net](https://fmhy.net/android-iosguide#camera-tools)
@@ -172,6 +182,15 @@ FadCam is developed with the goal of providing a powerful, privacy-focused tool 
 - [danielbuenotecnologia.com](https://danielbuenotecnologia.com/2024/09/13/protege-tu-vida-con-la-app-fad-cam/)
 - [nothingforum.com](https://nothingforum.com/konu/fadcam-video-kaydi-icin-guvenli-bir-cozum.1982/)
 - [manualdousuario.net](https://manualdousuario.net/fadcam-videos-android-tela-desligada/)
+- [techwiser.com](https://techwiser.com/how-to-secretly-record-a-video-with-screen-off-on-android/)
+- [geeky-gadgets.com (2nd feature)](https://www.geeky-gadgets.com/15-foss-android-apps-that-are-not-on-the-google-play-store/)
+- [iiktshf.com](https://iiktshf.com/fadcam/)
+- [androidfreeware.net](https://www.androidfreeware.net/download-fadcam-apk.html)
+- [computer-wd.com](https://www.computer-wd.com/2024/08/new-mobile-apps.html)
+- [computer-wd.com (2nd feature)](https://www.computer-wd.com/2024/11/secretly-record-video-on-android.html)
+- [computer-wd.com (3rd feature)](https://www.computer-wd.com/2024/12/best-android-apps-2024.html)
+- [thetechboy.org](https://www.thetechboy.org/2024/11/undercover-recording-no-ads.html)
+- [tz887.com](https://www.tz887.com/app/311291.html)
 <!-- - https://www.cityrumors.it/tecnologia/il-trucco-per-fare-video-di-nascosto-con-il-tuo-smartphone-tutti-lo-stanno-provando.html -->
 
 
